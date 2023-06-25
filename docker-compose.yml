@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  blueprint:
+    image: ${CONTAINER_REGISTRY_PATH}/blueprint:latest
+    deploy:
+      mode: replicated
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+      resources:
+        # Hard limit
+        limits:
+          cpus: "2"
+          memory: 256M
+        # Soft limit
+        reservations:
+          cpus: "0.5"
+          memory: 50M
+      labels:
+        - "traefik.http.routers.blueprint.rule=Host(`${SERVICE_HOST}`) && PathPrefix(`/blueprint`)"
+        - "traefik.http.services.blueprint.loadbalancer.server.port=5000"
+        - "traefik.http.middlewares.blueprint-stripprefix.stripprefix.prefixes=/blueprint, /blueprint/"
+        - "traefik.http.routers.blueprint.middlewares=blueprint-stripprefix"
+    command: ["uvicorn", "main:app", "--root-path", "/blueprint", "--host", "0.0.0.0", "--port", "5000", "--proxy-headers"]
+    environment:
+      # Redis configs
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_PASS: ${REDIS_PASS}
+      REDIS_DB: ${REDIS_DB}
+      # Database configs
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASS: ${DB_PASS}
+    networks:
+      - traefik-net
+      - redis-net
+
+networks:
+  traefik-net:
+    driver: overlay
+    external: true
+  redis-net:
+    driver: overlay
+    external: true

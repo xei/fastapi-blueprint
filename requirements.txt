@@ -1,0 +1,7 @@
+aioredis
+minio
+pandas
+pycaret
+redis
+tensorflow
+wheel

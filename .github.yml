@@ -1,0 +1,72 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Login to Container Registry
+        run: docker login -u ${{ secrets.CONTAINER_REGISTRY_USER }} -p ${{ secrets.CONTAINER_REGISTRY_PASS }} ${{ secrets.CONTAINER_REGISTRY_HOST }}
+
+      - name: Build Blueprint
+        run: |
+          IMAGE_BLUEPRINT=${{ secrets.CONTAINER_REGISTRY_PATH }}/blueprint
+          docker pull $IMAGE_BLUEPRINT:latest || true
+          docker build --cache-from $IMAGE_BLUEPRINT:latest -f Dockerfile -t $IMAGE_BLUEPRINT:latest .
+          docker push $IMAGE_BLUEPRINT:latest
+
+      - name: Deploy Blueprint
+        run: docker stack deploy -c docker-compose.yml --with-registry-auth blueprint
+
+  etl_job:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Create volume for ETL job
+        run: docker volume create blueprint-etl-job-vol
+
+      - name: Run ETL Job
+        run: |
+          docker run -d --rm --name blueprint-etl-job
+            -v blueprint-etl-job-vol:/jobs
+            --network gitlab-net
+            -e DB_HOST=$DB_HOST
+            -e DB_PORT=$DB_PORT
+            -e DB_NAME=$DB_NAME
+            -e DB_USER=$DB_USER
+            -e DB_PASS=$DB_PASS
+            -e REDIS_HOST=$REDIS_HOST_IN_GITLAB_NET
+            -e REDIS_PORT=$REDIS_PORT
+            -e REDIS_PASS=$REDIS_PASS
+            -e REDIS_DB=$REDIS_DB
+            ${{ secrets.CONTAINER_REGISTRY_PATH }}/etl-base-image:latest tail -f /dev/null
+          docker cp jobs/etl.py blueprint-etl-job:/jobs/
+          docker exec blueprint-etl-job python /jobs/etl.py
+
+      - name: Cleanup ETL Job
+        run: |
+          docker stop blueprint-etl-job
+          docker volume rm blueprint-etl-job-vol
+
+      - name: Notify on completion
+        run: |
+          export https_proxy=http://192.168.100.130:8888/
+          export http_proxy=http://192.168.100.130:8888/
+          apk add --update curl
+          rm -rf /var/cache/apk/*
+          curl -X POST "$SKYPE_BOT_URL" \
+            -H "accept: application/json" -H "Content-Type: application/json" \
+            -d "{\"msg\": \"Notif:\nBlueprint ETL job is done at $CI_JOB_STARTED_AT (UTC).\nStatus: $CI_JOB_STATUS\nPipeline source: $CI_PIPELINE_SOURCE\nSee logs on $CI_JOB_URL\"}"
